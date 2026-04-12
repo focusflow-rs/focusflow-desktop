@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FocusFlow Desktop
+Comment=Tray-based Pomodoro timer
+Exec=focusflow-desktop
+Icon=alarm-symbolic
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
