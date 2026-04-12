@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 pub struct PomodoroConfig {
     pub work_minutes: u64,
     pub break_minutes: u64,
+    pub auto_start_next_phase: bool,
 }
 
 impl Default for PomodoroConfig {
@@ -13,6 +14,7 @@ impl Default for PomodoroConfig {
         Self {
             work_minutes: 25,
             break_minutes: 5,
+            auto_start_next_phase: false,
         }
     }
 }
@@ -60,13 +62,20 @@ impl PomodoroState {
 pub enum PomodoroCommand {
     Toggle,
     Reset,
+    SetWorkMinutes(u64),
+    SetBreakMinutes(u64),
+    SetAutoStartNextPhase(bool),
     Quit,
 }
 
 #[derive(Debug, Clone)]
 pub enum PomodoroEvent {
     StateChanged(PomodoroState),
-    PhaseCompleted(PomodoroState),
+    PhaseCompleted {
+        completed_phase: PomodoroPhase,
+        focused_seconds: u64,
+        state: PomodoroState,
+    },
 }
 
 pub struct PomodoroEngine;
@@ -74,20 +83,22 @@ pub struct PomodoroEngine;
 impl PomodoroEngine {
     pub fn spawn(
         config: PomodoroConfig,
+        initial_state: Option<PomodoroState>,
         command_rx: mpsc::UnboundedReceiver<PomodoroCommand>,
         event_tx: mpsc::UnboundedSender<PomodoroEvent>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            Self::run(config, command_rx, event_tx).await;
+            Self::run(config, initial_state, command_rx, event_tx).await;
         })
     }
 
     async fn run(
-        config: PomodoroConfig,
+        mut config: PomodoroConfig,
+        initial_state: Option<PomodoroState>,
         mut command_rx: mpsc::UnboundedReceiver<PomodoroCommand>,
         event_tx: mpsc::UnboundedSender<PomodoroEvent>,
     ) {
-        let mut state = PomodoroState::new(config);
+        let mut state = initial_state.unwrap_or_else(|| PomodoroState::new(config));
         let _ = event_tx.send(PomodoroEvent::StateChanged(state.clone()));
 
         loop {
@@ -98,12 +109,18 @@ impl PomodoroEngine {
                             state.remaining = state.remaining.saturating_sub(Duration::from_secs(1));
                             let _ = event_tx.send(PomodoroEvent::StateChanged(state.clone()));
                         } else {
-                            state = Self::advance_phase(state, config);
-                            let _ = event_tx.send(PomodoroEvent::PhaseCompleted(state.clone()));
+                            let (new_state, completed_phase, focused_seconds) = Self::advance_phase(state, config);
+                            state = new_state;
+                            let _ = event_tx.send(PomodoroEvent::PhaseCompleted {
+                                completed_phase,
+                                focused_seconds,
+                                state: state.clone(),
+                            });
+                            let _ = event_tx.send(PomodoroEvent::StateChanged(state.clone()));
                         }
                     }
                     command = command_rx.recv() => {
-                        if !Self::apply_command(&mut state, command, config, &event_tx) {
+                        if !Self::apply_command(&mut state, command, &mut config, &event_tx) {
                             break;
                         }
                     }
@@ -111,7 +128,7 @@ impl PomodoroEngine {
             } else {
                 match command_rx.recv().await {
                     Some(command) => {
-                        if !Self::apply_command(&mut state, Some(command), config, &event_tx) {
+                        if !Self::apply_command(&mut state, Some(command), &mut config, &event_tx) {
                             break;
                         }
                     }
@@ -124,7 +141,7 @@ impl PomodoroEngine {
     fn apply_command(
         state: &mut PomodoroState,
         command: Option<PomodoroCommand>,
-        config: PomodoroConfig,
+        config: &mut PomodoroConfig,
         event_tx: &mpsc::UnboundedSender<PomodoroEvent>,
     ) -> bool {
         match command {
@@ -132,7 +149,24 @@ impl PomodoroEngine {
                 state.running = !state.running;
             }
             Some(PomodoroCommand::Reset) => {
-                *state = PomodoroState::new(config);
+                *state = PomodoroState::new(*config);
+            }
+            Some(PomodoroCommand::SetWorkMinutes(minutes)) => {
+                config.work_minutes = minutes;
+                if state.phase == PomodoroPhase::Focus {
+                    let full_seconds = config.work_minutes.saturating_mul(60).max(1);
+                    state.remaining = Duration::from_secs(full_seconds);
+                }
+            }
+            Some(PomodoroCommand::SetBreakMinutes(minutes)) => {
+                config.break_minutes = minutes;
+                if state.phase == PomodoroPhase::Break {
+                    let full_seconds = config.break_minutes.saturating_mul(60).max(1);
+                    state.remaining = Duration::from_secs(full_seconds);
+                }
+            }
+            Some(PomodoroCommand::SetAutoStartNextPhase(value)) => {
+                config.auto_start_next_phase = value;
             }
             Some(PomodoroCommand::Quit) | None => {
                 return false;
@@ -143,22 +177,31 @@ impl PomodoroEngine {
         true
     }
 
-    fn advance_phase(mut state: PomodoroState, config: PomodoroConfig) -> PomodoroState {
-        match state.phase {
+    fn advance_phase(
+        mut state: PomodoroState,
+        config: PomodoroConfig,
+    ) -> (PomodoroState, PomodoroPhase, u64) {
+        let completed_phase = state.phase;
+        let focused_seconds = if completed_phase == PomodoroPhase::Focus {
+            config.work_minutes.saturating_mul(60)
+        } else {
+            0
+        };
+
+        match completed_phase {
             PomodoroPhase::Focus => {
                 state.phase = PomodoroPhase::Break;
                 state.remaining = Duration::from_secs(config.break_minutes * 60);
-                state.running = false;
+                state.running = config.auto_start_next_phase;
                 state.completed_focus_sessions = state.completed_focus_sessions.saturating_add(1);
             }
             PomodoroPhase::Break => {
                 state.phase = PomodoroPhase::Focus;
                 state.remaining = Duration::from_secs(config.work_minutes * 60);
-                state.running = false;
+                state.running = config.auto_start_next_phase;
             }
         }
 
-        state
+        (state, completed_phase, focused_seconds)
     }
 }
-
