@@ -98,7 +98,10 @@ impl PomodoroTray {
 
         notify(
             "FocusFlow",
-            &format!("Preset applied: {}m focus / {}m break", work_minutes, break_minutes),
+            &format!(
+                "Preset applied: {}m focus / {}m break",
+                work_minutes, break_minutes
+            ),
         );
     }
 
@@ -123,7 +126,11 @@ impl PomodoroTray {
                         "Config reloaded: work {}m, break {}m, auto-next {}",
                         loaded.work_minutes,
                         loaded.break_minutes,
-                        if loaded.auto_start_next_phase { "on" } else { "off" }
+                        if loaded.auto_start_next_phase {
+                            "on"
+                        } else {
+                            "off"
+                        }
                     ),
                 );
 
@@ -287,6 +294,15 @@ impl Tray for PomodoroTray {
                 icon_name: String::from("view-refresh"),
                 activate: Box::new(|tray: &mut Self| {
                     let _ = tray.command_tx.send(PomodoroCommand::Reset);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: String::from("Skip current phase"),
+                icon_name: String::from("media-skip-forward"),
+                activate: Box::new(|tray: &mut Self| {
+                    let _ = tray.command_tx.send(PomodoroCommand::Skip);
                 }),
                 ..Default::default()
             }
