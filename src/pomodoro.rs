@@ -62,6 +62,7 @@ impl PomodoroState {
 pub enum PomodoroCommand {
     Toggle,
     Reset,
+    Skip,
     SetWorkMinutes(u64),
     SetBreakMinutes(u64),
     SetAutoStartNextPhase(bool),
@@ -151,6 +152,9 @@ impl PomodoroEngine {
             Some(PomodoroCommand::Reset) => {
                 *state = PomodoroState::new(*config);
             }
+            Some(PomodoroCommand::Skip) => {
+                *state = Self::skip_phase(*state, *config);
+            }
             Some(PomodoroCommand::SetWorkMinutes(minutes)) => {
                 config.work_minutes = minutes;
                 if state.phase == PomodoroPhase::Focus {
@@ -203,5 +207,22 @@ impl PomodoroEngine {
         }
 
         (state, completed_phase, focused_seconds)
+    }
+
+    fn skip_phase(mut state: PomodoroState, config: PomodoroConfig) -> PomodoroState {
+        match state.phase {
+            PomodoroPhase::Focus => {
+                state.phase = PomodoroPhase::Break;
+                state.remaining =
+                    Duration::from_secs(config.break_minutes.saturating_mul(60).max(1));
+            }
+            PomodoroPhase::Break => {
+                state.phase = PomodoroPhase::Focus;
+                state.remaining =
+                    Duration::from_secs(config.work_minutes.saturating_mul(60).max(1));
+            }
+        }
+
+        state
     }
 }
