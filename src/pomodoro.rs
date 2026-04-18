@@ -153,7 +153,7 @@ impl PomodoroEngine {
                 *state = PomodoroState::new(*config);
             }
             Some(PomodoroCommand::Skip) => {
-                *state = Self::skip_phase(*state, *config);
+                Self::skip_phase(state, *config);
             }
             Some(PomodoroCommand::SetWorkMinutes(minutes)) => {
                 config.work_minutes = minutes;
@@ -209,7 +209,7 @@ impl PomodoroEngine {
         (state, completed_phase, focused_seconds)
     }
 
-    fn skip_phase(mut state: PomodoroState, config: PomodoroConfig) -> PomodoroState {
+    fn skip_phase(state: &mut PomodoroState, config: PomodoroConfig) {
         match state.phase {
             PomodoroPhase::Focus => {
                 state.phase = PomodoroPhase::Break;
@@ -222,7 +222,5 @@ impl PomodoroEngine {
                     Duration::from_secs(config.work_minutes.saturating_mul(60).max(1));
             }
         }
-
-        state
     }
 }
