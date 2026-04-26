@@ -2,6 +2,8 @@ mod config;
 mod pomodoro;
 mod sound;
 mod storage;
+#[cfg(test)]
+mod test_sync;
 mod tray;
 
 use anyhow::Result;
