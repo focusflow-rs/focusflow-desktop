@@ -404,10 +404,16 @@ mod tests {
         let (mut tray, mut rx) = make_tray_with_receiver();
 
         assert!(activate_menu_item_by_label(&mut tray, "Work +5 min"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(35))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetWorkMinutes(35))
+        ));
 
         assert!(activate_menu_item_by_label(&mut tray, "Break +1 min"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(11))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetBreakMinutes(11))
+        ));
 
         assert!(activate_menu_item_by_label(
             &mut tray,
@@ -419,8 +425,14 @@ mod tests {
         ));
 
         assert!(activate_menu_item_by_label(&mut tray, "25 / 5"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(25))));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(5))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetWorkMinutes(25))
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetBreakMinutes(5))
+        ));
         assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Reset)));
     }
 
@@ -479,20 +491,44 @@ mod tests {
         let _guard = crate::test_sync::io_lock();
         let (mut tray, mut rx) = make_tray_with_receiver();
 
-        assert!(activate_menu_item_by_label(&mut tray, "Work: 30 min (click -5)"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(25))));
+        assert!(activate_menu_item_by_label(
+            &mut tray,
+            "Work: 30 min (click -5)"
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetWorkMinutes(25))
+        ));
 
-        assert!(activate_menu_item_by_label(&mut tray, "Break: 10 min (click -1)"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(9))));
+        assert!(activate_menu_item_by_label(
+            &mut tray,
+            "Break: 10 min (click -1)"
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetBreakMinutes(9))
+        ));
 
         assert!(activate_menu_item_by_label(&mut tray, "50 / 10"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(50))));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(10))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetWorkMinutes(50))
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetBreakMinutes(10))
+        ));
         assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Reset)));
 
         assert!(activate_menu_item_by_label(&mut tray, "90 / 20"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(90))));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(20))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetWorkMinutes(90))
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetBreakMinutes(20))
+        ));
         assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Reset)));
     }
 
@@ -511,9 +547,18 @@ mod tests {
         )
         .expect("should write config file");
 
-        assert!(activate_menu_item_by_label(&mut tray, "Reload config from file"));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(40))));
-        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(8))));
+        assert!(activate_menu_item_by_label(
+            &mut tray,
+            "Reload config from file"
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetWorkMinutes(40))
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetBreakMinutes(8))
+        ));
         assert!(matches!(
             rx.try_recv(),
             Ok(PomodoroCommand::SetAutoStartNextPhase(true))

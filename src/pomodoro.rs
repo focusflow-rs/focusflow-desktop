@@ -451,10 +451,7 @@ mod tests {
         ));
 
         assert!(!PomodoroEngine::apply_command(
-            &mut state,
-            None,
-            &mut cfg,
-            &tx
+            &mut state, None, &mut cfg, &tx
         ));
     }
 
@@ -472,7 +469,8 @@ mod tests {
             auto_start_next_phase: true,
         };
 
-        let (new_state, completed_phase, focused_seconds) = PomodoroEngine::advance_phase(state, cfg);
+        let (new_state, completed_phase, focused_seconds) =
+            PomodoroEngine::advance_phase(state, cfg);
 
         assert_eq!(completed_phase, PomodoroPhase::Focus);
         assert_eq!(focused_seconds, 50 * 60);
@@ -496,7 +494,8 @@ mod tests {
             auto_start_next_phase: false,
         };
 
-        let (new_state, completed_phase, focused_seconds) = PomodoroEngine::advance_phase(state, cfg);
+        let (new_state, completed_phase, focused_seconds) =
+            PomodoroEngine::advance_phase(state, cfg);
 
         assert_eq!(completed_phase, PomodoroPhase::Break);
         assert_eq!(focused_seconds, 0);
@@ -530,7 +529,10 @@ mod tests {
                 assert_eq!(state.phase, restored.phase);
                 assert_eq!(state.running, restored.running);
                 assert_eq!(state.remaining, restored.remaining);
-                assert_eq!(state.completed_focus_sessions, restored.completed_focus_sessions);
+                assert_eq!(
+                    state.completed_focus_sessions,
+                    restored.completed_focus_sessions
+                );
             }
             _ => panic!("expected StateChanged as first event"),
         }
