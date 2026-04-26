@@ -143,6 +143,39 @@ impl PomodoroTray {
             }
         }
     }
+
+    fn show_status(&self) {
+        let (work, break_) = self
+            .with_config(|cfg| (cfg.work_minutes, cfg.break_minutes))
+            .unwrap_or((25, 5));
+
+        let (today_sessions, today_seconds, total_sessions, total_seconds) = self
+            .with_stats(|stats| {
+                (
+                    stats.focus_sessions_today,
+                    stats.focus_seconds_today,
+                    stats.total_focus_sessions,
+                    stats.total_focus_seconds,
+                )
+            })
+            .unwrap_or((0, 0, 0, 0));
+
+        notify(
+            "FocusFlow Status",
+            &format!(
+                "{} phase, {} remaining ({})\nToday: {} sessions, {}\nAll-time: {} sessions, {}\nConfig: work {}m, break {}m",
+                self.phase_name(),
+                self.remaining_label,
+                if self.running { "running" } else { "paused" },
+                today_sessions,
+                format_focus_time(today_seconds),
+                total_sessions,
+                format_focus_time(total_seconds),
+                work,
+                break_
+            ),
+        );
+    }
 }
 
 pub fn notify(summary: &str, body: &str) {
@@ -175,6 +208,347 @@ fn format_focus_time(seconds: u64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     format!("{hours:02}h {minutes:02}m")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    fn prepare_test_environment() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let base = std::env::temp_dir().join("focusflow-desktop-tests");
+            let _ = std::fs::create_dir_all(&base);
+            std::env::set_var("XDG_CONFIG_HOME", &base);
+        });
+    }
+
+    fn make_tray_with_receiver() -> (PomodoroTray, mpsc::UnboundedReceiver<PomodoroCommand>) {
+        prepare_test_environment();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        let cfg = AppConfig {
+            work_minutes: 30,
+            break_minutes: 10,
+            sound_on_finish: true,
+            auto_start_next_phase: false,
+        };
+        let stats = AppStats {
+            day_index_utc: 0,
+            focus_sessions_today: 2,
+            focus_seconds_today: 1800,
+            total_focus_sessions: 15,
+            total_focus_seconds: 20_000,
+        };
+
+        (
+            PomodoroTray::new(tx, Arc::new(Mutex::new(cfg)), Arc::new(Mutex::new(stats))),
+            rx,
+        )
+    }
+
+    fn find_standard_item<'a>(
+        items: &'a [MenuItem<PomodoroTray>],
+        label: &str,
+    ) -> Option<&'a StandardItem<PomodoroTray>> {
+        items.iter().find_map(|item| match item {
+            MenuItem::Standard(standard) if standard.label == label => Some(standard),
+            _ => None,
+        })
+    }
+
+    fn activate_menu_item_by_label(tray: &mut PomodoroTray, label: &str) -> bool {
+        fn activate_recursive(
+            items: &[MenuItem<PomodoroTray>],
+            tray: &mut PomodoroTray,
+            label: &str,
+        ) -> bool {
+            for item in items {
+                match item {
+                    MenuItem::Standard(standard) if standard.label == label => {
+                        (standard.activate)(tray);
+                        return true;
+                    }
+                    MenuItem::SubMenu(submenu) => {
+                        if activate_recursive(&submenu.submenu, tray, label) {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+
+        let menu = tray.menu();
+        activate_recursive(&menu, tray, label)
+    }
+
+    #[test]
+    fn format_focus_time_formats_hours_and_minutes() {
+        assert_eq!(format_focus_time(0), "00h 00m");
+        assert_eq!(format_focus_time(65 * 60), "01h 05m");
+    }
+
+    #[test]
+    fn sync_state_updates_phase_running_and_remaining() {
+        let (mut tray, _rx) = make_tray_with_receiver();
+        let state = PomodoroState {
+            phase: PomodoroPhase::Break,
+            running: true,
+            remaining: std::time::Duration::from_secs(9 * 60 + 5),
+            completed_focus_sessions: 4,
+        };
+
+        tray.sync_state(&state);
+
+        assert_eq!(tray.phase, PomodoroPhase::Break);
+        assert!(tray.running);
+        assert_eq!(tray.remaining_label, "09:05");
+        assert_eq!(tray.completed_focus_sessions, 4);
+    }
+
+    #[test]
+    fn tray_visual_methods_reflect_current_state() {
+        let (mut tray, _rx) = make_tray_with_receiver();
+        let state = PomodoroState {
+            phase: PomodoroPhase::Focus,
+            running: false,
+            remaining: std::time::Duration::from_secs(5 * 60),
+            completed_focus_sessions: 1,
+        };
+        tray.sync_state(&state);
+
+        assert_eq!(tray.id(), "focusflow-desktop");
+        assert_eq!(tray.icon_name(), "alarm-symbolic");
+        assert_eq!(tray.title(), "FF F 05:00");
+        assert_eq!(tray.text_direction(), TextDirection::LeftToRight);
+        assert!(tray.icon_pixmap().is_empty());
+    }
+
+    #[test]
+    fn tooltip_contains_status_and_config_summary() {
+        let (mut tray, _rx) = make_tray_with_receiver();
+        let state = PomodoroState {
+            phase: PomodoroPhase::Focus,
+            running: true,
+            remaining: std::time::Duration::from_secs(10 * 60),
+            completed_focus_sessions: 3,
+        };
+        tray.sync_state(&state);
+
+        let tooltip = tray.tool_tip();
+
+        assert_eq!(tooltip.title, "FocusFlow");
+        assert!(tooltip.description.contains("Focus phase"));
+        assert!(tooltip.description.contains("10:00 remaining"));
+        assert!(tooltip.description.contains("Sessions this run: 3"));
+        assert!(tooltip.description.contains("Config: work 30m, break 10m"));
+    }
+
+    #[test]
+    fn menu_contains_expected_primary_actions() {
+        let (tray, _rx) = make_tray_with_receiver();
+        let menu = tray.menu();
+
+        assert!(find_standard_item(&menu, "Start").is_some());
+        assert!(find_standard_item(&menu, "Reset").is_some());
+        assert!(find_standard_item(&menu, "Skip current phase").is_some());
+        assert!(find_standard_item(&menu, "Show status").is_some());
+        assert!(find_standard_item(&menu, "Quit").is_some());
+    }
+
+    #[test]
+    fn menu_shows_pause_when_running() {
+        let (mut tray, _rx) = make_tray_with_receiver();
+        let state = PomodoroState {
+            phase: PomodoroPhase::Focus,
+            running: true,
+            remaining: std::time::Duration::from_secs(2 * 60),
+            completed_focus_sessions: 0,
+        };
+        tray.sync_state(&state);
+
+        let menu = tray.menu();
+        assert!(find_standard_item(&menu, "Pause").is_some());
+        assert!(find_standard_item(&menu, "Start").is_none());
+    }
+
+    #[test]
+    fn start_reset_skip_and_quit_actions_send_expected_commands() {
+        let (mut tray, mut rx) = make_tray_with_receiver();
+        let menu = tray.menu();
+
+        let start = find_standard_item(&menu, "Start").expect("missing Start item");
+        (start.activate)(&mut tray);
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Toggle)));
+
+        let reset = find_standard_item(&menu, "Reset").expect("missing Reset item");
+        (reset.activate)(&mut tray);
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Reset)));
+
+        let skip = find_standard_item(&menu, "Skip current phase").expect("missing Skip item");
+        (skip.activate)(&mut tray);
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Skip)));
+
+        let quit = find_standard_item(&menu, "Quit").expect("missing Quit item");
+        (quit.activate)(&mut tray);
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Quit)));
+    }
+
+    #[test]
+    fn submenu_actions_apply_expected_changes() {
+        let _guard = crate::test_sync::io_lock();
+        let (mut tray, mut rx) = make_tray_with_receiver();
+
+        assert!(activate_menu_item_by_label(&mut tray, "Work +5 min"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(35))));
+
+        assert!(activate_menu_item_by_label(&mut tray, "Break +1 min"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(11))));
+
+        assert!(activate_menu_item_by_label(
+            &mut tray,
+            "Auto-start next phase: off"
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetAutoStartNextPhase(true))
+        ));
+
+        assert!(activate_menu_item_by_label(&mut tray, "25 / 5"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(25))));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(5))));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Reset)));
+    }
+
+    #[test]
+    fn stats_and_status_actions_execute_without_command_side_effects() {
+        let _guard = crate::test_sync::io_lock();
+        let (mut tray, mut rx) = make_tray_with_receiver();
+
+        assert!(activate_menu_item_by_label(&mut tray, "Show status"));
+        assert!(rx.try_recv().is_err());
+
+        assert!(activate_menu_item_by_label(&mut tray, "Reset today stats"));
+        assert!(rx.try_recv().is_err());
+
+        assert!(activate_menu_item_by_label(&mut tray, "Reset all stats"));
+        assert!(rx.try_recv().is_err());
+
+        let stats = tray.shared_stats.lock().expect("stats lock should work");
+        assert_eq!(stats.focus_sessions_today, 0);
+        assert_eq!(stats.focus_seconds_today, 0);
+        assert_eq!(stats.total_focus_sessions, 0);
+        assert_eq!(stats.total_focus_seconds, 0);
+    }
+
+    #[test]
+    fn icon_name_covers_all_phase_running_combinations() {
+        let (mut tray, _rx) = make_tray_with_receiver();
+
+        tray.sync_state(&PomodoroState {
+            phase: PomodoroPhase::Focus,
+            running: true,
+            remaining: std::time::Duration::from_secs(60),
+            completed_focus_sessions: 0,
+        });
+        assert_eq!(tray.icon_name(), "media-record-symbolic");
+
+        tray.sync_state(&PomodoroState {
+            phase: PomodoroPhase::Break,
+            running: true,
+            remaining: std::time::Duration::from_secs(60),
+            completed_focus_sessions: 0,
+        });
+        assert_eq!(tray.icon_name(), "face-smile-symbolic");
+
+        tray.sync_state(&PomodoroState {
+            phase: PomodoroPhase::Break,
+            running: false,
+            remaining: std::time::Duration::from_secs(60),
+            completed_focus_sessions: 0,
+        });
+        assert_eq!(tray.icon_name(), "appointment-soon-symbolic");
+    }
+
+    #[test]
+    fn additional_menu_actions_emit_expected_commands() {
+        let _guard = crate::test_sync::io_lock();
+        let (mut tray, mut rx) = make_tray_with_receiver();
+
+        assert!(activate_menu_item_by_label(&mut tray, "Work: 30 min (click -5)"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(25))));
+
+        assert!(activate_menu_item_by_label(&mut tray, "Break: 10 min (click -1)"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(9))));
+
+        assert!(activate_menu_item_by_label(&mut tray, "50 / 10"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(50))));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(10))));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Reset)));
+
+        assert!(activate_menu_item_by_label(&mut tray, "90 / 20"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(90))));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(20))));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::Reset)));
+    }
+
+    #[test]
+    fn reload_config_action_reads_file_and_dispatches_updates() {
+        let _guard = crate::test_sync::io_lock();
+        let (mut tray, mut rx) = make_tray_with_receiver();
+
+        let config_path = AppConfig::config_path().expect("config path should resolve");
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).expect("should create config dir");
+        }
+        std::fs::write(
+            &config_path,
+            "work_minutes = 40\nbreak_minutes = 8\nsound_on_finish = true\nauto_start_next_phase = true\n",
+        )
+        .expect("should write config file");
+
+        assert!(activate_menu_item_by_label(&mut tray, "Reload config from file"));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetWorkMinutes(40))));
+        assert!(matches!(rx.try_recv(), Ok(PomodoroCommand::SetBreakMinutes(8))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PomodoroCommand::SetAutoStartNextPhase(true))
+        ));
+    }
+
+    #[test]
+    fn menu_and_tooltip_use_fallback_values_when_locks_are_poisoned() {
+        prepare_test_environment();
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        let poisoned_config = Arc::new(Mutex::new(AppConfig::default()));
+        let cfg_ref = poisoned_config.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = cfg_ref.lock().expect("lock should work before poisoning");
+            panic!("intentional poison");
+        })
+        .join();
+
+        let poisoned_stats = Arc::new(Mutex::new(AppStats::default()));
+        let stats_ref = poisoned_stats.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = stats_ref.lock().expect("lock should work before poisoning");
+            panic!("intentional poison");
+        })
+        .join();
+
+        let tray = PomodoroTray::new(tx, poisoned_config, poisoned_stats);
+        let tooltip = tray.tool_tip();
+        let menu = tray.menu();
+
+        assert!(tooltip.description.contains("Config: work 25m, break 5m"));
+        assert!(find_standard_item(&menu, "Start").is_some());
+    }
 }
 
 impl Tray for PomodoroTray {
@@ -303,6 +677,15 @@ impl Tray for PomodoroTray {
                 icon_name: String::from("media-skip-forward"),
                 activate: Box::new(|tray: &mut Self| {
                     let _ = tray.command_tx.send(PomodoroCommand::Skip);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: String::from("Show status"),
+                icon_name: String::from("dialog-information"),
+                activate: Box::new(|tray: &mut Self| {
+                    tray.show_status();
                 }),
                 ..Default::default()
             }
